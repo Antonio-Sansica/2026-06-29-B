@@ -1,6 +1,5 @@
 from database.DB_connect import DBConnect
 from model.album import Album
-from model.track import Track
 
 
 class DAO():
@@ -36,15 +35,15 @@ class DAO():
 
         cursor = conn.cursor(dictionary=True)
         query = """
-                SELECT distinct t.*
-                from Track t 
+                SELECT distinct t.TrackId, t.AlbumId 
+                from Album a 
+                join Track t on a.AlbumId = t.AlbumId 
                 """
 
         cursor.execute(query)
 
         for row in cursor:
-            track = Track(**row)
-            results.append(track)
+            results.append((row['TrackId'], row['AlbumId']))
 
         cursor.close()
         conn.close()
@@ -58,15 +57,15 @@ class DAO():
 
         cursor = conn.cursor(dictionary=True)
         query = """
-                SELECT distinct t1.id1 as id_1, t2.id2 as id_2
+                SELECT distinct t1.idA1 as id_1, t2.idA2 as id_2
                 from
-                (SELECT distinct a.AlbumId as id1, t.GenreId as g1
+                (SELECT distinct t.TrackId as idT1, t.GenreId as idG1, t.AlbumId as idA1
                 from Album a 
-                join Track t on a.AlbumId = t.AlbumId ) t1,
-                (SELECT distinct a.AlbumId as id2, t.GenreId as g2
+                join Track t on a.AlbumId = t.AlbumId) t1,
+                (SELECT distinct t.TrackId as idT2, t.GenreId as idG2, t.AlbumId as idA2
                 from Album a 
                 join Track t on a.AlbumId = t.AlbumId) t2
-                where t1.g1 = t2.g2 and t1.id1 < t2.id2
+                where t1.idG1 = t2.idG2 and t1.idA1 < t2.idA2
                 """
 
         cursor.execute(query)
@@ -77,6 +76,7 @@ class DAO():
         cursor.close()
         conn.close()
         return results
+
 
 
 

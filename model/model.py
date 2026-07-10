@@ -1,31 +1,26 @@
-import copy
-
 import networkx as nx
-
 from database.DAO import DAO
 
 
 class Model:
     def __init__(self):
         self.mappa_nodi = {}
+        self.lista_tracce = []
         self.grafo = nx.Graph()
+        self.popola_mappa_nodi()
 
-    def popola_mappa(self):
+    def popola_mappa_nodi(self):
         self.mappa_nodi.clear()
         lista_nodi = DAO.getAllNodi()
+        lista_tracce = DAO.getAllTracks()
         for nodo in lista_nodi:
             self.mappa_nodi[nodo.AlbumId] = nodo
-
-        lista_tracks = DAO.getAllTracks()
-        for track in lista_tracks:
-            if track.AlbumId in self.mappa_nodi:
-                album_corrispondente = self.mappa_nodi[track.AlbumId]
-                album_corrispondente.tracks.append(track)
-
+            for track, album in lista_tracce:
+                if album == nodo.AlbumId:
+                    self.mappa_nodi[nodo.AlbumId].tracks.append(track)
 
     def build_graph(self):
         self.grafo.clear()
-        self.popola_mappa()
 
         self.grafo.add_nodes_from(self.mappa_nodi.values())
 
@@ -45,34 +40,24 @@ class Model:
         return nx.number_connected_components(self.grafo)
 
     def get_componente_connessa_maggiore(self):
-        # 1. Quante sono in totale?
         num_componenti = nx.number_connected_components(self.grafo)
 
-        # 2. Ottengo una lista di "set" (insiemi) contenenti i nodi di ciascuna componente connessa
         componenti = list(nx.connected_components(self.grafo))
 
-        # 3. Trovo quella più grande usando len() come chiave per la ricerca del massimo
         if not componenti:
-            return 0, []
+            return []
         comp_maggiore = max(componenti, key=len)
 
-        return num_componenti, list(comp_maggiore)
+        return list(comp_maggiore)
 
-    # =========================================================================
-    # RICORSIONE 3: SOTTOINSIEMI / COMBINAZIONI (La "Scelta di K elementi")
-    # === QUANDO USARLA ===
-    # Quando la traccia dice: "Trova un SET di K nodi che massimizza/minimizza
-    # un certo valore, rispettando dei vincoli" (Es. "nessuno dei K nodi deve
-    # essere collegato agli altri").
-    # === ATTENZIONE ===
-    # Qui NON si usano gli archi (neighbors) per muoversi! Si pesca da una lista.
-    # =========================================================================
+
+
+
     def calcola_sottoinsieme_ottimo(self, K, nodo_partenza):
         self._soluzione_ottima = []
-        self._punteggio_ottimo = 0  # Cerchiamo il massimo, partiamo da 0
+        self._punteggio_ottimo = 0
 
-        # --- OTTIMIZZAZIONE 1: PRE-CALCOLO LE FAMIGLIE ---
-        # Creo un dizionario: Chiave = Nodo, Valore = ID della componente connessa (0, 1, 2...)
+        # --- OTTIMIZZAZIONE 1: PRE-CALCOLO LE FAMIGLIE (Componenti Connesse) ---
         self.mappa_famiglie = {}
         componenti = list(nx.connected_components(self.grafo))
 
@@ -84,15 +69,16 @@ class Model:
             for n in comp:
                 self.mappa_famiglie[n] = id_famiglia
 
-        # --- OTTIMIZZAZIONE 2: FILTRO IL CESTO ---
-        # Trovo la famiglia del nodo di partenza
-        famiglia_partenza = self.mappa_famiglie[nodo_partenza]
+        famiglia_partenza = self.mappa_famiglie.get(nodo_partenza, None)
 
         # Nodi validi: Prendo tutti i nodi, ma SCARTO SUBITO quelli che sono nella stessa
         # componente connessa del nodo di partenza (perché violerebbero il vincolo dal primo step!)
         nodi_validi = [n for n in self.grafo.nodes() if self.mappa_famiglie[n] != famiglia_partenza]
 
+        # Il nodo di partenza entra di diritto nella squadra
         parziale = [nodo_partenza]
+
+        # Faccio partire la ricorsione da posizione 0
         self._ricorsione_sottoinsieme(parziale, nodi_validi, K, 0)
 
         return self._soluzione_ottima, self._punteggio_ottimo
@@ -103,42 +89,37 @@ class Model:
             # Calcolo il punteggio di questa squadra/set
             punteggio = self._calcola_punteggio_set(parziale)
 
-            # Controllo se è il nuovo record (Usa < per MINIMO, > per MASSIMO)
+            # Controllo se è il nuovo record MAX
             if punteggio > self._punteggio_ottimo:
                 self._punteggio_ottimo = punteggio
-                self._soluzione_ottima = copy.deepcopy(parziale)
+                # Uso list() invece di deepcopy() per non rallentare l'algoritmo
+                self._soluzione_ottima = list(parziale)
             return
 
-        # 2. TRUCCO "PRUNING" (Taglio dei rami morti) - FONDAMENTALE!
-        # Se nel 'cesto' sono rimasti meno elementi di quanti me ne servono per arrivare a K,
-        # è inutile continuare a cercare. Interrompo subito per non far crashare/freezare il PC.
+        # 2. PRUNING (Taglio dei rami morti)
         nodi_rimanenti_nel_cesto = len(nodi_validi) - pos
         if len(parziale) + nodi_rimanenti_nel_cesto < K:
             return
 
         # 3. ESPLORAZIONE
-        # Parto da 'pos' (e non da 0) per NON generare permutazioni doppie (Es: A-B e B-A)
         for i in range(pos, len(nodi_validi)):
-            nodo = nodi_validi[i]
+            nodo_candidato = nodi_validi[i]
 
             # Controllo se questo nodo può entrare in squadra
-            if self._vincolo_sottoinsieme(nodo, parziale):
-                parziale.append(nodo)
+            if self._vincolo_sottoinsieme(nodo_candidato, parziale):
+                parziale.append(nodo_candidato)
 
-                # VADO IN PROFONDITÀ.
-                # 🚨 PASSO i + 1: Questo mi vieta di ripescare lo stesso nodo!
+                # VADO IN PROFONDITÀ (i + 1 per non ripescare lo stesso nodo)
                 self._ricorsione_sottoinsieme(parziale, nodi_validi, K, i + 1)
 
                 # BACKTRACKING
                 parziale.pop()
 
     def _calcola_punteggio_set(self, parziale):
-        # --- SOSTITUISCI CON LA MATEMATICA DELLA TRACCIA ---
-        # Es. Se cerco la differenza tra il più giovane e il più vecchio:
         punteggio = 0
-        for album in parziale:
-            punteggio += len(album.tracks)
-
+        for nodo in parziale:
+            # Sostituisci '.tracks' con la lista o l'attributo reale da sommare all'esame!
+            punteggio += len(nodo.tracks)
         return punteggio
 
     def _vincolo_sottoinsieme(self, nodo_candidato, parziale):
@@ -147,12 +128,11 @@ class Model:
 
         # Controllo se qualcuno in 'parziale' ha la stessa targhetta
         for nodo_in_squadra in parziale:
-            famiglia_in_squadra = self.mappa_famiglie[nodo_in_squadra]
+            famiglia_in_squadra = self.mappa_famiglie.get(nodo_in_squadra, None)
             if famiglia_candidato == famiglia_in_squadra:
                 return False
 
         return True
-
 
 
 
